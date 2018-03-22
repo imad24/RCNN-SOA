@@ -1,5 +1,6 @@
 *.pyc
 .ipynb_checkpoints
 _pycache_/
-images/
-annotations/
+images/*
+annotations/*
+labels.txt

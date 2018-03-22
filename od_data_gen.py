@@ -45,12 +45,13 @@ LABELS = ['aeroplane', 'bicycle', 'bird', 'boat',
 #LABELS += 'background'
 
 NBCLASSES = len(LABELS)
-NB_IMAGES = 1
+NB_IMAGES = 2
+
 
 class DataGen(object): #PascalVOCDataGeneratorForObjectDetection
     
     def __init__(self, subset, data_path):
-    
+        
         assert subset in ['train', 'val', 'trainval', 'test']
         self.subset = subset
 
@@ -71,13 +72,23 @@ class DataGen(object): #PascalVOCDataGeneratorForObjectDetection
         self.nb_classes = len(self.labels) # 20 classes for PascalVOC
 
         # Get all the images' ids for the given subset
-        self.images_ids_in_subset = self._get_images_ids_from_subset(self.subset)[0:NB_IMAGES]
+        self.images_ids_in_subset = self._get_images_ids_from_subset(self.subset)
         self.nb_images = len(self.images_ids_in_subset)
         
+        #Get a dict of each image and its number of regions
+        self.image_dict,self.total_nb_images = self._get_region_image_table(6403);
+        
+        #public acces dataset and according dict {image:nb_regions}
         
         
         
-        self.total_nb_images = self._get_total_number_images();
+        self.DataSet = np.asarray(self.images_ids_in_subset).astype(int);
+        
+        dic  = {k:v for (k,v) in self.image_dict.items() if k in self.DataSet}
+        
+        self.DataDict = dic
+        
+        self.TotalDataSet = sum(dic.values())
         
         # Create the id_to_label dict with all the images' ids 
         # but the values are arrays with nb_classes (20) zeros 
@@ -92,10 +103,10 @@ class DataGen(object): #PascalVOCDataGeneratorForObjectDetection
 
     
     
-    def generateRegionsData(self,Display = False): #Be very careful here
+    def generateRegionsData(self,Display = False,from_image=0,to_image=1): #Be very careful here
         
-        with open('labels.txt', 'w'): pass
-        for i in range(1,self.nb_images+1):
+        with open('annotations/labels_%06d_%06d.txt'%(from_image+1,to_image+1), 'w'): pass
+        for i in range(self.from_image+1,self.to_image+1):
             imagePath = self._get_image_file_path(i)
     
             bb_labels,bb_boxes = self._get_ground_truth_bb(i)
@@ -134,10 +145,14 @@ class DataGen(object): #PascalVOCDataGeneratorForObjectDetection
                 #path = "images/%03d_%s.jpg"%(j,rp[1])
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
-                    io.imsave(path,image)
-                #regions += [{"num":i,"filepath":path,"rect":rp[1]}]
-                with open('labels.txt', 'a') as f:
-                    f.write("%06d %d %d\n"%(i,j+1,labels[j]))
+                    try:
+                        io.imsave(path,image)
+                        #regions += [{"num":i,"filepath":path,"rect":rp[1]}]
+                        with open('annotations/labels_%06d_%06d.txt'%(self.from_image+1,self.to_image+1), 'a') as f:
+                            f.write("%06d %d %d\n"%(i,j+1,labels[j]))
+                    except:
+                        pass
+
               
         print("Generation Completed");
         
@@ -153,9 +168,10 @@ class DataGen(object): #PascalVOCDataGeneratorForObjectDetection
         for child in root:
             if child.tag == 'object':
                 labels += [child[0].text]
-                bbox = child[4]
-                bboxes += [(int(bbox[0].text),int(bbox[1].text),int(bbox[2].text),int(bbox[3].text))]
-        
+                for subchild in child:
+                    if subchild.tag == 'bndbox':
+                        bbox = subchild
+                        bboxes += [(int(bbox[0].text),int(bbox[1].text),int(bbox[2].text),int(bbox[3].text))]
         return labels,bboxes
 
     def _bbox_to_rect(self,rect):
@@ -277,13 +293,13 @@ class DataGen(object): #PascalVOCDataGeneratorForObjectDetection
         return annotationFilePath
     
     def _get_total_number_images(self):
-        with open('labels.txt','r') as f:
+        with open('annotations/labels.txt','r') as f:
             l = f.read().splitlines()
             return len(l)
         
     def _get_regions_of_image(self, imageId):
-        filePath = 'labels.txt'
-        labels = np.loadtxt('labels.txt').astype(int)
+        filePath = 'annotations/labels.txt'
+        labels = np.loadtxt(filePath).astype(int)
         imageLines = np.where(labels[:,0]==int(imageId))[0]
         regions=[]
         for line in labels[imageLines]:
@@ -322,7 +338,13 @@ class DataGen(object): #PascalVOCDataGeneratorForObjectDetection
                     if is_present == 1:
                         self.id_to_label[image_id][i] = 1
 
-    
+    def _get_region_image_table(self,last):
+        fileLines = np.loadtxt('annotations/labels.txt')
+        nbr={}
+        for i in range(1,last):
+            regions =  np.where(fileLines[:,0]==i)[0]
+            nbr[i]=len(regions)
+        return nbr,len(fileLines)
     
     
     
@@ -332,20 +354,48 @@ class DataGen(object): #PascalVOCDataGeneratorForObjectDetection
         """
         with open(os.path.join(self.labels_path, subset + '.txt'), 'r') as f:
             images_ids = f.read().splitlines()
-        return images_ids
+            #random.shuffle(images_ids)
+        return images_ids[:NB_IMAGES]
+    
+    
+    def get_xy_from_image(self,iid):
+        image_id = "%06d"%iid
+        img = image.load_img(os.path.join(self.images_path, image_id + EXT), grayscale=False, target_size=(IMG_HEIGHT, IMG_WIDTH))         
+        #treat regions instead of whole images
+        regions = self._get_regions_of_image(image_id)
+        X_batch = []
+        Y_batch = []
+        for region in regions:
+                imgPath = os.path.join('images', region[0])
+                img = image.load_img(imgPath, grayscale=False, target_size=(IMG_HEIGHT, IMG_WIDTH))       
+                # Cast the Image object to a numpy array and put the channel has the last dimension
+                img_arr = image.img_to_array(img, data_format='channels_last')
+                X_batch.append(img_arr)       
+                y = self._label_to_one_hot(region[1])
+                Y_batch.append(y)                    
+        # resize X_batch in (batch_size, IMG_HEIGHT, IMG_WIDTH, 3) 
+        X_batch = np.reshape(X_batch, (-1, IMG_HEIGHT, IMG_WIDTH, 3))
+        # resize Y_batch in (None, nb_classes) 
+        Y_batch = np.reshape(Y_batch, (-1, self.nb_classes+1))
+        # The preprocess consists of substracting the ImageNet RGB means values
+        # https://github.com/keras-team/keras/blob/master/keras/applications/imagenet_utils.py#L72
+        X_batch = preprocess_input(X_batch, data_format='channels_last') 
+        return X_batch,Y_batch     
     
     
     def _generate_batch(self, batch_size=32):
         nb_batches = int(len(self.images_ids_in_subset) / batch_size) + 1
-        while True:
-            # Before each epoch we shuffle the images' ids
-            random.shuffle(self.images_ids_in_subset)
-            for i in range(nb_batches):
+        nb_batches = 1
+        size = len(self.images_ids_in_subset)
+        # Before each epoch we shuffle the images' ids
+        random.shuffle(self.images_ids_in_subset)
+        for i in range(nb_batches):
                 # We first get all the images' ids for the next batch
-                current_bach = self.images_ids_in_subset[i*batch_size:(i+1)*batch_size]
+                current_bach = self.images_ids_in_subset[i*batch_size:(i+1)*size]
                 #X_batch = []
                 #Y_batch = []
                 for image_id in current_bach:
+                    print(image_id)
                     # Load the image and resize it. We get a PIL Image object 
                     img = image.load_img(os.path.join(self.images_path, image_id + EXT), grayscale=False, target_size=(IMG_HEIGHT, IMG_WIDTH))      
                     
@@ -387,12 +437,16 @@ class DataGen(object): #PascalVOCDataGeneratorForObjectDetection
         :param batch_size: the batch's size
         """
         nb_batches = int(len(self.images_ids_in_subset) / batch_size) + 1
+        
+        nb_batches = 1
+        size = len(self.images_ids_in_subset)
+        
         while True:
             # Before each epoch we shuffle the images' ids
             random.shuffle(self.images_ids_in_subset)
             for i in range(nb_batches):
                 # We first get all the images' ids for the next batch
-                current_bach = self.images_ids_in_subset[i*batch_size:(i+1)*batch_size]
+                current_bach = self.images_ids_in_subset[i*batch_size:(i+1)*size]
                 #X_batch = []
                 #Y_batch = []
                 for image_id in current_bach:
@@ -421,7 +475,8 @@ class DataGen(object): #PascalVOCDataGeneratorForObjectDetection
                         # The preprocess consists of substracting the ImageNet RGB means values
                         # https://github.com/keras-team/keras/blob/master/keras/applications/imagenet_utils.py#L72
                         X_batch = preprocess_input(X_batch, data_format='channels_last')
-                        yield(X_batch, Y_batch)    
+                        if(len(X_batch)>0):
+                            yield(X_batch, Y_batch)    
 
                 
     def flow(self, batch_size=32):
