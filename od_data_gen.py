@@ -45,12 +45,14 @@ LABELS = ['aeroplane', 'bicycle', 'bird', 'boat',
 #LABELS += 'background'
 
 NBCLASSES = len(LABELS)
-NB_IMAGES = 2
+
 
 
 class DataGen(object): #PascalVOCDataGeneratorForObjectDetection
     
-    def __init__(self, subset, data_path):
+    def __init__(self, subset, data_path,keep = 2):
+        
+        self.keep = keep
         
         assert subset in ['train', 'val', 'trainval', 'test']
         self.subset = subset
@@ -75,6 +77,9 @@ class DataGen(object): #PascalVOCDataGeneratorForObjectDetection
         self.images_ids_in_subset = self._get_images_ids_from_subset(self.subset)
         self.nb_images = len(self.images_ids_in_subset)
         
+        self.DataSet = np.asarray(self.images_ids_in_subset).astype(int);
+        
+        return
         #Get a dict of each image and its number of regions
         self.image_dict,self.total_nb_images = self._get_region_image_table(6403);
         
@@ -82,7 +87,7 @@ class DataGen(object): #PascalVOCDataGeneratorForObjectDetection
         
         
         
-        self.DataSet = np.asarray(self.images_ids_in_subset).astype(int);
+        
         
         dic  = {k:v for (k,v) in self.image_dict.items() if k in self.DataSet}
         
@@ -106,7 +111,7 @@ class DataGen(object): #PascalVOCDataGeneratorForObjectDetection
     def generateRegionsData(self,Display = False,from_image=0,to_image=1): #Be very careful here
         
         with open('annotations/labels_%06d_%06d.txt'%(from_image+1,to_image+1), 'w'): pass
-        for i in range(self.from_image+1,self.to_image+1):
+        for i in range(from_image+1,to_image+1):
             imagePath = self._get_image_file_path(i)
     
             bb_labels,bb_boxes = self._get_ground_truth_bb(i)
@@ -135,7 +140,7 @@ class DataGen(object): #PascalVOCDataGeneratorForObjectDetection
                             labels += [20]
                             saved = True
             print("Treating image N°: %06d ..."%i)
-            print("\t There is %d regions proposed and %d regions saved"%(len(raw_regions),len(regions)))
+            print("\t There is %d regions proposed"%(len(raw_regions),))
             
             for j,rp in enumerate(regions):
                 #continue;
@@ -148,14 +153,62 @@ class DataGen(object): #PascalVOCDataGeneratorForObjectDetection
                     try:
                         io.imsave(path,image)
                         #regions += [{"num":i,"filepath":path,"rect":rp[1]}]
-                        with open('annotations/labels_%06d_%06d.txt'%(self.from_image+1,self.to_image+1), 'a') as f:
+                        with open('annotations/labels_%06d_%06d.txt'%(from_image+1,to_image+1), 'a') as f:
                             f.write("%06d %d %d\n"%(i,j+1,labels[j]))
-                    except:
+                    except Exception as e:
+                        print(repr(e))
                         pass
-
+            print("\t %d regions were saved"%(len(regions),))
               
         print("Generation Completed");
         
+        
+    def generate_xy_from_image(self,image_id):    
+        regions,labels = self._generate_regions_of_image(image_id)
+        X_batch = []
+        Y_batch = []
+        for i,region in enumerate(regions):
+                img = T.resize(region, (IMG_HEIGHT,IMG_WIDTH),mode="reflect")
+                X_batch.append(img)       
+                y = self._label_to_one_hot(labels[i])
+                Y_batch.append(y)                    
+  
+        Y_batch = np.reshape(Y_batch, (-1, self.nb_classes+1))
+        X_batch = np.reshape(X_batch, (-1, IMG_HEIGHT, IMG_WIDTH, 3))
+        X_batch = preprocess_input(X_batch, data_format='channels_last')
+        
+        return X_batch,Y_batch  
+        
+    def _generate_regions_of_image(self, imageId,Display=False):       
+        imagePath = self._get_image_file_path(imageId)
+
+        bb_labels,bb_boxes = self._get_ground_truth_bb(imageId)
+        reg_prop,raw_regions = self._get_regions_propsal(imagePath)        
+
+        regions = []
+        labels = []
+        #Compare every proposed region with defined Pascal VOC regions
+        for r,rp in enumerate(reg_prop):
+            saved = False
+            for l,bb in enumerate(bb_boxes):
+                pred = self._rect_to_bbox(rp[1])
+                gt = bb;
+                UoI = self._bb_intersection_over_union(gt,pred)
+                if(UoI>UoI_THRESHOLD):               
+                    if (Display): self._display_UiO(imagePath,gt,pred)
+                    if not saved:
+                        regions.append(rp[0])
+                        labels.append(LABELS.index(bb_labels[l]))
+                        saved = True
+                    else:
+                        labels[-1]= LABELS.index(bb_labels[l])
+                else:
+                    if not saved:
+                        regions.append(rp[0])
+                        labels.append(20)
+                        saved = True
+        
+        return regions,labels
 
     def _get_ground_truth_bb(self,fileNum):
         filePath = self._get_annotation_file_path(fileNum)
@@ -354,18 +407,18 @@ class DataGen(object): #PascalVOCDataGeneratorForObjectDetection
         """
         with open(os.path.join(self.labels_path, subset + '.txt'), 'r') as f:
             images_ids = f.read().splitlines()
-            #random.shuffle(images_ids)
-        return images_ids[:NB_IMAGES]
+            random.shuffle(images_ids)
+        return images_ids[:self.keep]
     
     
     def get_xy_from_image(self,iid):
         image_id = "%06d"%iid
         img = image.load_img(os.path.join(self.images_path, image_id + EXT), grayscale=False, target_size=(IMG_HEIGHT, IMG_WIDTH))         
         #treat regions instead of whole images
-        regions = self._get_regions_of_image(image_id)
+        regions_labels = self._get_regions_of_image(image_id)
         X_batch = []
         Y_batch = []
-        for region in regions:
+        for region in regions_labels:
                 imgPath = os.path.join('images', region[0])
                 img = image.load_img(imgPath, grayscale=False, target_size=(IMG_HEIGHT, IMG_WIDTH))       
                 # Cast the Image object to a numpy array and put the channel has the last dimension
@@ -524,7 +577,6 @@ class DataGen(object): #PascalVOCDataGeneratorForObjectDetection
                 yield(X_batch, Y_batch)                   
                 
                 
-                
-                
+
                 
                 
