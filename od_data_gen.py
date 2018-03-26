@@ -24,7 +24,7 @@ MIN_SIZE = 225
 
 UoI_THRESHOLD = 0.5
 
-random.seed(2506)
+#random.seed(2506)
 
 IMG_HEIGHT = 224
 IMG_WIDTH = 224
@@ -50,6 +50,15 @@ NBCLASSES = len(LABELS)
 
 class DataGen(object): #PascalVOCDataGeneratorForObjectDetection
     
+
+    def __enter__(self):
+            return self # this is bound to the `as` part
+
+
+    def __exit__(self, *err):
+        return
+    
+    
     def __init__(self, subset, data_path,keep = 2):
         
         self.keep = keep
@@ -60,10 +69,6 @@ class DataGen(object): #PascalVOCDataGeneratorForObjectDetection
         self.data_path = data_path
         self.images_path = os.path.join(self.data_path, 'JPEGImages')
         self.labels_path = os.path.join(self.data_path, 'ImageSets', 'Main')
-        
-        
-        print(self._get_total_number_images())
-        
         
         # The id_to_label dict has the following structure
         # key : image's id (e.g. 00084)
@@ -80,34 +85,14 @@ class DataGen(object): #PascalVOCDataGeneratorForObjectDetection
         self.DataSet = np.asarray(self.images_ids_in_subset).astype(int);
         
         return
+        #public acces dataset and according dict {image:nb_regions}
         #Get a dict of each image and its number of regions
         self.image_dict,self.total_nb_images = self._get_region_image_table(6403);
-        
-        #public acces dataset and according dict {image:nb_regions}
-        
-        
-        
-        
-        
         dic  = {k:v for (k,v) in self.image_dict.items() if k in self.DataSet}
-        
-        self.DataDict = dic
-        
+        self.DataDict = dic        
         self.TotalDataSet = sum(dic.values())
-        
-        # Create the id_to_label dict with all the images' ids 
-        # but the values are arrays with nb_classes (20) zeros 
-        
-       # self._initialize_id_to_label_dict()
-        
-        # Fill the values in the id_to_label dict by putting 1 when
-        # the label is in the image given by the key
-
-        #self._fill_id_to_label_dict_with_classes()   
 
 
-    
-    
     def generateRegionsData(self,Display = False,from_image=0,to_image=1): #Be very careful here
         
         with open('annotations/labels_%06d_%06d.txt'%(from_image+1,to_image+1), 'w'): pass
@@ -168,11 +153,13 @@ class DataGen(object): #PascalVOCDataGeneratorForObjectDetection
         X_batch = []
         Y_batch = []
         for i,region in enumerate(regions):
-                img = T.resize(region, (IMG_HEIGHT,IMG_WIDTH),mode="reflect")
+            try:
+                img = T.resize(region, (IMG_HEIGHT,IMG_WIDTH),mode="constant")
                 X_batch.append(img)       
                 y = self._label_to_one_hot(labels[i])
                 Y_batch.append(y)                    
-  
+            except Exception as e:
+                continue
         Y_batch = np.reshape(Y_batch, (-1, self.nb_classes+1))
         X_batch = np.reshape(X_batch, (-1, IMG_HEIGHT, IMG_WIDTH, 3))
         X_batch = preprocess_input(X_batch, data_format='channels_last')
@@ -435,6 +422,47 @@ class DataGen(object): #PascalVOCDataGeneratorForObjectDetection
         X_batch = preprocess_input(X_batch, data_format='channels_last') 
         return X_batch,Y_batch     
     
+    
+    def bias_flow(self,X,Y,batch_size=128):
+
+        nb_batches = int(len(Y) / batch_size) + 1
+        pos_prop = 32
+        neg_prop = batch_size-pos_prop
+        
+        maxes = np.argmax(Y,axis=1)
+        #positive windows
+        pos = np.where(maxes!=20)[0]
+        #negative windows
+        neg = np.where(maxes==20)[0]
+        
+        #separate positive and negative images
+        posX = X[pos]
+        posY = Y[pos]
+        
+        #only persons
+        #person = np.where(posY[:,14]==1)[0]
+        #posX = posX[person]
+        
+        negX = X[neg]
+        negY = Y[neg]
+        
+        posInd = np.arange(len(pos))
+        negInd = np.arange(len(neg))
+        
+        while True:          
+            for i in range(nb_batches):
+                #shuffle indices
+                np.random.shuffle(posInd)
+                np.random.shuffle(negInd)
+
+                posInd = posInd[:pos_prop]
+                negInd = negInd[:neg_prop]
+                #mini batch of 128 (32 positive windows + 96 negative windows)
+                X_batch = np.concatenate((posX[posInd],negX[negInd]),axis = 0)
+                Y_batch = np.concatenate((posY[posInd],negY[negInd]),axis = 0)
+                yield(X_batch, Y_batch)
+                
+                
     
     def _generate_batch(self, batch_size=32):
         nb_batches = int(len(self.images_ids_in_subset) / batch_size) + 1
