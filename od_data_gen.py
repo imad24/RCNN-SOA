@@ -423,10 +423,10 @@ class DataGen(object): #PascalVOCDataGeneratorForObjectDetection
         return X_batch,Y_batch     
     
     
-    def bias_flow(self,X,Y,batch_size=128):
+    def bias_flow(self,X,Y,batch_size=128,pos_size=32,full_batch=1):
 
         nb_batches = int(len(Y) / batch_size) + 1
-        pos_prop = 32
+        pos_prop = pos_size
         neg_prop = batch_size-pos_prop
         
         maxes = np.argmax(Y,axis=1)
@@ -439,24 +439,81 @@ class DataGen(object): #PascalVOCDataGeneratorForObjectDetection
         posX = X[pos]
         posY = Y[pos]
         
-        #only persons
-        #person = np.where(posY[:,14]==1)[0]
-        #posX = posX[person]
+        posEx = posX,posY
         
         negX = X[neg]
         negY = Y[neg]
         
+        negEx = negX,negY
+        
         posInd = np.arange(len(pos))
         negInd = np.arange(len(neg))
         
+        np.random.shuffle(posInd)
+        np.random.shuffle(negInd)
+        
+        pos_from = 0
+        pos_to = pos_prop
+
+        neg_from = 0
+        neg_to = neg_prop
+        
+        allposInd = posInd
+        allnegInd = negInd
+        
         while True:          
             for i in range(nb_batches):
-                #shuffle indices
-                np.random.shuffle(posInd)
-                np.random.shuffle(negInd)
+ 
+                if full_batch==1:  
+                    #shuffle indices
+                    np.random.shuffle(allposInd)
+                    np.random.shuffle(allnegInd)
+                    
+                    notAll = True
+                    posClass = np.full((pos_prop),-1)
+                    posInd =np.arange(pos_prop)
+                    i = 0
+                    j = 0
+                    while notAll:
+                        c = np.argmax(posY[allposInd[i]])+1
+                        if (np.all(posClass != c) or len(np.unique(np.argmax(posY[posInd],axis=1)))>20):
+                            posClass[j] = c
+                            posInd[j] = allposInd[i]
+                            j+=1
+                        i+=1;
+                        notAll = j<pos_prop and i<len(allposInd)
+                    negInd = negInd[:neg_prop]
+                    
+                    #try to pass on all the examples
+                elif full_batch == 2:   
+                    
+                    posInd = allposInd[pos_from:pos_to] 
+                    negInd = allnegInd[neg_from:neg_to]
+                    
+                    pos_from += pos_prop
+                    pos_to += pos_prop
+                    
+                    neg_from += neg_prop
+                    neg_to +=neg_prop
+                    
+                    if(pos_to)>=len(pos):
+                        pos_from = 0
+                        pos_to = pos_prop
+                        #np.random.shuffle(allposInd)
+                        
+                    if(neg_to)>=len(neg):
+                        neg_from = 0
+                        neg_to = neg_prop
+                        #np.random.shuffle(allnegInd)                        
+                else:
+                    #totaly random 
+                    
+                    #shuffle indices
+                    np.random.shuffle(posInd)
+                    np.random.shuffle(negInd)
+                    posInd = posInd[:pos_prop] 
+                    negInd = negInd[:neg_prop]                     
 
-                posInd = posInd[:pos_prop]
-                negInd = negInd[:neg_prop]
                 #mini batch of 128 (32 positive windows + 96 negative windows)
                 X_batch = np.concatenate((posX[posInd],negX[negInd]),axis = 0)
                 Y_batch = np.concatenate((posY[posInd],negY[negInd]),axis = 0)
