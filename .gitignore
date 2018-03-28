@@ -4,3 +4,4 @@ _pycache_/
 images/*
 annotations/*
 labels.txt
+*.npz

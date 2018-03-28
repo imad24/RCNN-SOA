@@ -101,7 +101,6 @@ class DataGen(object): #PascalVOCDataGeneratorForObjectDetection
     
             bb_labels,bb_boxes = self._get_ground_truth_bb(i)
             reg_prop,raw_regions = self._get_regions_propsal(imagePath)        
-
             regions = []
             labels = []
             #Compare every proposed region with defined Pascal VOC regions
